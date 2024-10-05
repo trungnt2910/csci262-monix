@@ -79,3 +79,8 @@ exploit, `monix` puts these data together in a list of protected regions with a 
 header. The `horse` module scans for this exact magic and makes its malicious patches on the found
 region. This usually is not the case for real operating systems, where rootkits often rely on debug
 symbols to reveal private functions and data structures.
+
+The async patch protection subsystem periodically checks these critical data blobs and compares them
+with some stored SHA3-512 hashes. If corrupted regions are detected and the corruption's severity
+is beyond what simple repairs can handle, `monix` immediately calls `abort` to prevent further
+damage.

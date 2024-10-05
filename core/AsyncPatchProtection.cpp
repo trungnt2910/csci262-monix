@@ -35,8 +35,8 @@ constexpr int MX_ASYNC_PATCH_PROTECTION_INTERVAL_SECONDS = 10;
 static void MxpAsyncPatchProtectionLoop();
 static int MxpAsyncPatchProtectionCallback();
 static void MxpAsyncPatchProtectionCleanup();
-// memcpy but bypasses page protection.
-static int MxpGodMemcpy(const void* dst, const void* src, size_t size);
+// memcpy but for protected regions. Unprotects pages first before copying.
+static int MxpProtectedMemcpy(const void* dst, const void* src, size_t size);
 static std::vector<char> MxpHashSha3_512(const std::span<const char>& data);
 
 MX_HIDDEN_FROM_MODULES
@@ -118,6 +118,15 @@ int MxAsyncPatchProtectionTrigger()
         return -1;
     }
 
+    // This function is called in three scenarios:
+    // - After an interval, Linux sends a SIGALRM, raising the installed signal handler.
+    // - When other signals are sent, this function is called along with other handlers.
+    // - Manually by some other functions, such as `MxModuleLoad`.
+
+    // To prevent different patch protection callbacks from interfering with each other,
+    // everything is run in one thread, guarded by a semaphore.
+    // The semaphore is released every time patch protection is requested.
+
     s_CallbackSemaphore.release();
 
     return 0;
@@ -131,6 +140,9 @@ static void MxpAsyncPatchProtectionLoop()
         if (MxpAsyncPatchProtectionCallback() == -1)
         {
             Logger.LogError("Monix system integrity check failed.");
+
+            // Fail immediately. Don't do any cleanup, since they themselves might be
+            // infected with malware.
             abort();
         }
     }
@@ -178,17 +190,19 @@ static int MxpAsyncPatchProtectionCallback()
             {
                 const char correctData[8] = "Monix";
                 const size_t correctSize = sizeof(correctData);
-                MX_RETURN_IF_FAIL(MxpGodMemcpy(
+                MX_RETURN_IF_FAIL(MxpProtectedMemcpy(
                     &g_ProtectedInfo[i].size, &correctSize, sizeof(correctSize)));
-                MX_RETURN_IF_FAIL(MxpGodMemcpy(g_ProtectedInfo[i].data, correctData, correctSize));
+                MX_RETURN_IF_FAIL(MxpProtectedMemcpy(
+                    g_ProtectedInfo[i].data, correctData,correctSize));
             }
             else if (name == "ProtectedRegionMagic")
             {
                 const int correctData = MX_PROTECTED_REGION_MAGIC;
                 const size_t correctSize = sizeof(correctData);
-                MX_RETURN_IF_FAIL(MxpGodMemcpy(
+                MX_RETURN_IF_FAIL(MxpProtectedMemcpy(
                     &g_ProtectedInfo[i].size, &correctSize, sizeof(correctSize)));
-                MX_RETURN_IF_FAIL(MxpGodMemcpy(g_ProtectedInfo[i].data, &correctData, correctSize));
+                MX_RETURN_IF_FAIL(MxpProtectedMemcpy(
+                    g_ProtectedInfo[i].data, &correctData, correctSize));
             }
             else
             {
@@ -199,6 +213,7 @@ static int MxpAsyncPatchProtectionCallback()
         }
     }
 
+    // Time recording for statistics.
     std::chrono::time_point callbackEnd =
         std::chrono::high_resolution_clock::now();
 
@@ -219,7 +234,7 @@ static void MxpAsyncPatchProtectionCleanup()
     s_BackgroundThread.release();
 }
 
-static int MxpGodMemcpy(const void* dst, const void* src, size_t size)
+static int MxpProtectedMemcpy(const void* dst, const void* src, size_t size)
 {
     intptr_t begin = (intptr_t)((char*)dst);
     intptr_t end = (intptr_t)((char*)dst + size);

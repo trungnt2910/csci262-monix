@@ -219,7 +219,7 @@ static int MxpAsyncPatchProtectionCallback()
 
     s_CallbackTotalTime += callbackEnd - callbackStart;
 
-    Logger.LogTrace("Patch protection has consumed ",
+    Logger.LogInfo("Patch protection has consumed ",
         s_CallbackTotalTime.count() / 1000000.0,
         "ms of processing time.");
 
